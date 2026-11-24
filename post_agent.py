@@ -36,17 +36,50 @@ Rules:
 - Output ONLY the final post text.
 """
 
-MODELS_TO_TRY = [
-    ("v1beta", "gemini-2.5-flash"),
-    ("v1beta", "gemini-2.0-flash"),
-    ("v1beta", "gemini-1.5-flash"),
-    ("v1", "gemini-1.5-flash"),
-]
+
+def get_available_models():
+    found = []
+    for version in ("v1beta", "v1"):
+        list_url = f"https://generativelanguage.googleapis.com/{version}/models?key={GEMINI_API_KEY}"
+        try:
+            r = requests.get(list_url, timeout=20)
+            if r.status_code == 200:
+                models = r.json().get("models", [])
+                for m in models:
+                    name = m.get("name", "")
+                    methods = m.get("supportedGenerationMethods", [])
+                    if "generateContent" in methods and name:
+                        clean_name = name.replace("models/", "")
+                        found.append((version, clean_name))
+        except Exception:
+            pass
+
+    # Flash বা নতুন মডেলগুলোকে আগে রাখি
+    found.sort(key=lambda item: (0 if "flash" in item[1] else 1, item[1]), reverse=False)
+    # 2.5 বা 2.0 থাকলে অগ্রাধিকার দিই
+    prioritized = []
+    for pref in ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"):
+        for ver, mod in found:
+            if mod == pref and (ver, mod) not in prioritized:
+                prioritized.append((ver, mod))
+    for ver, mod in found:
+        if (ver, mod) not in prioritized:
+            prioritized.append((ver, mod))
+    return prioritized
+
+
+candidate_models = get_available_models()
+if not candidate_models:
+    candidate_models = [
+        ("v1beta", "gemini-2.0-flash"),
+        ("v1beta", "gemini-2.5-flash"),
+        ("v1beta", "gemini-1.5-flash-latest"),
+    ]
 
 generated_text = None
-last_error = None
+errors = []
 
-for api_version, model_name in MODELS_TO_TRY:
+for api_version, model_name in candidate_models:
     url = f"https://generativelanguage.googleapis.com/{api_version}/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
     payload = {
         "contents": [
@@ -57,10 +90,9 @@ for api_version, model_name in MODELS_TO_TRY:
     }
     try:
         resp = requests.post(url, json=payload, timeout=30)
-        if resp.status_code == 404:
-            last_error = f"404 for {api_version}/{model_name}: {resp.text}"
+        if resp.status_code != 200:
+            errors.append(f"{api_version}/{model_name} [{resp.status_code}]: {resp.text[:160]}")
             continue
-        resp.raise_for_status()
         data = resp.json()
         candidates = data.get("candidates", [])
         if candidates:
@@ -71,10 +103,10 @@ for api_version, model_name in MODELS_TO_TRY:
                 print(f"Generated post using {api_version}/{model_name}")
                 break
     except Exception as exc:
-        last_error = str(exc)
+        errors.append(f"{api_version}/{model_name} [EXC]: {str(exc)[:160]}")
 
 if not generated_text:
-    raise RuntimeError(f"Failed to generate content from Gemini API. Last error: {last_error}")
+    raise RuntimeError("No working Gemini model found or generation failed: " + " | ".join(errors[-3:]))
 
 print("----- GENERATED POST -----")
 print(generated_text)
