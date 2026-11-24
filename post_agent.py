@@ -7,63 +7,80 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 BINANCE_SQUARE_API_KEY = os.environ.get("BINANCE_SQUARE_API_KEY", "").strip()
 
 if not GEMINI_API_KEY or not BINANCE_SQUARE_API_KEY:
-    raise ValueError("Missing GEMINI_API_KEY or BINANCE_SQUARE_API_KEY in GitHub Secrets.")
+    raise ValueError("Missing GEMINI_API_KEY or BINANCE_SQUARE_API_KEY in environment.")
 
-BD_TZ = timezone(timedelta(hours=6))
-now_bd = datetime.now(BD_TZ)
-hour_bd = now_bd.hour
-
-if 5 <= hour_bd < 12:
-    slot_name = "Morning"
-    vibe = "Sharp morning market pulse, key psychology check, and high-energy hook to start the trading day."
-elif 12 <= hour_bd < 17:
-    slot_name = "Afternoon"
-    vibe = "Mid-day momentum check, common trader traps to avoid, and crisp actionable insight."
-else:
-    slot_name = "Evening"
-    vibe = "Evening wrap-up, risk management reflection, and engaging question for global traders."
-
-angles = [
-    "contrarian market belief",
-    "trader psychology & FOMO trap",
-    "risk management rule that saves accounts",
-    "liquidity & breakout patience",
-    "simple comparison between disciplined vs emotional trading"
+TOPICS = [
+    "Bitcoin price action, key support/resistance levels, and market sentiment today",
+    "Ethereum and Layer-2 ecosystem updates, network activity, and trader takeaways",
+    "Altcoin momentum, liquidity rotation, and risk management tips for crypto traders",
+    "Crypto market psychology, avoiding FOMO/panic selling, and disciplined trading habits",
+    "Stablecoin flows, macro news impact on crypto, and what traders are watching next",
 ]
-chosen_angle = random.choice(angles)
 
-history_file = "last_post.txt"
-previous_note = ""
-if os.path.exists(history_file):
-    with open(history_file, "r", encoding="utf-8") as f:
-        previous_note = f.read().strip()
+BD_TIME = datetime.now(timezone.utc) + timedelta(hours=6)
+slot_label = BD_TIME.strftime("%I:%M %p BDT")
+topic = random.choice(TOPICS)
 
 prompt = f"""
-You are a top-performing crypto creator on Binance Square writing in English.
-Create ONE viral, high-engagement Binance Square post for the {slot_name} slot.
+You are a sharp, engaging crypto market creator posting on Binance Square in English.
+Write a high-retention, viral-style short post about: {topic}.
+Context time: {slot_label}.
 
-Style & Vibe: {vibe}
-Angle: {chosen_angle}
-Avoid repeating this previous post summary: {previous_note}
-
-Strict formatting rules:
-1. Start with a punchy 1-2 line scroll-stopping hook (no cheesy clickbait or guaranteed profit promises).
-2. Keep paragraphs short (1-2 sentences max) and easy to skim on mobile.
-3. Include 2-3 clear bullet points with concrete trading/market takeaways.
-4. Include 2-3 relevant cashtags like $BTC, $BNB, $ETH, or $SOL only where natural.
-5. End with a short, natural question to spark comments.
-6. Total length: roughly 110 to 180 words. Output ONLY the final post text, no quotes or extra labels.
+Rules:
+- Keep it concise, punchy, and easy to scan (around 110-180 words).
+- Start with a strong hook line.
+- Use clean bullet points or short paragraphs where helpful.
+- End with an engaging question to spark comments.
+- Add 3-5 relevant hashtags at the end (e.g., #Crypto #Bitcoin #BinanceSquare).
+- Do NOT give guaranteed financial advice; keep tone objective, sharp, and community-friendly.
+- Output ONLY the final post text.
 """
 
-gemini_url = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    f"gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-)
-gem_resp = requests.post(gemini_url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=30)
-gem_resp.raise_for_status()
-post_text = gem_resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+MODELS_TO_TRY = [
+    ("v1beta", "gemini-2.5-flash"),
+    ("v1beta", "gemini-2.0-flash"),
+    ("v1beta", "gemini-1.5-flash"),
+    ("v1", "gemini-1.5-flash"),
+]
 
-square_endpoints = [
+generated_text = None
+last_error = None
+
+for api_version, model_name in MODELS_TO_TRY:
+    url = f"https://generativelanguage.googleapis.com/{api_version}/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+    payload = {
+        "contents": [
+            {
+                "parts": [{"text": prompt}]
+            }
+        ]
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=30)
+        if resp.status_code == 404:
+            last_error = f"404 for {api_version}/{model_name}: {resp.text}"
+            continue
+        resp.raise_for_status()
+        data = resp.json()
+        candidates = data.get("candidates", [])
+        if candidates:
+            parts = candidates[0].get("content", {}).get("parts", [])
+            text = "".join(p.get("text", "") for p in parts).strip()
+            if text:
+                generated_text = text
+                print(f"Generated post using {api_version}/{model_name}")
+                break
+    except Exception as exc:
+        last_error = str(exc)
+
+if not generated_text:
+    raise RuntimeError(f"Failed to generate content from Gemini API. Last error: {last_error}")
+
+print("----- GENERATED POST -----")
+print(generated_text)
+print("--------------------------")
+
+SQUARE_ENDPOINTS = [
     "https://www.binance.com/bapi/composite/v1/public/pgc/open/content/add",
     "https://www.binance.com/bapi/composite/v1/friendly/pgc/open/content/add",
 ]
@@ -71,38 +88,32 @@ square_endpoints = [
 headers = {
     "Content-Type": "application/json",
     "X-Square-OpenAPI-Key": BINANCE_SQUARE_API_KEY,
-    "clienttype": "web",
+    "Authorization": f"Bearer {BINANCE_SQUARE_API_KEY}",
+    "User-Agent": "Mozilla/5.0",
 }
 
-payload_variants = [
-    {"bodyTextOnly": post_text},
-    {"content": post_text},
-    {"text": post_text},
+post_payloads = [
+    {"bodyTextOnly": generated_text},
+    {"content": generated_text},
+    {"text": generated_text},
 ]
 
 published = False
-last_error = ""
+square_errors = []
 
-for url in square_endpoints:
-    for body in payload_variants:
+for endpoint in SQUARE_ENDPOINTS:
+    for body in post_payloads:
         try:
-            r = requests.post(url, headers=headers, json=body, timeout=25)
+            r = requests.post(endpoint, json=body, headers=headers, timeout=30)
             if r.status_code in (200, 201):
-                resp_json = r.json() if r.text else {}
-                code = str(resp_json.get("code", "000000"))
-                if code in ("000000", "0", "200", ""):
-                    published = True
-                    break
-                last_error = f"API response ({url}): {resp_json}"
-            else:
-                last_error = f"HTTP {r.status_code} ({url}): {r.text[:200]}"
+                print("Published to Binance Square:", r.text[:300])
+                published = True
+                break
+            square_errors.append(f"{endpoint} [{r.status_code}]: {r.text[:200]}")
         except Exception as exc:
-            last_error = f"Error ({url}): {exc}"
+            square_errors.append(f"{endpoint} [EXC]: {str(exc)}")
     if published:
         break
 
 if not published:
-    raise RuntimeError(f"Failed to publish to Binance Square. Last error: {last_error}")
-
-with open(history_file, "w", encoding="utf-8") as f:
-    f.write(f"[{now_bd.isoformat()} - {slot_name} - {chosen_angle}] {post_text[:180]}")
+    raise RuntimeError("Failed to publish to Binance Square. Details: " + " | ".join(square_errors))
