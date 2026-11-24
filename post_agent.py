@@ -55,7 +55,7 @@ def get_available_models():
             pass
 
     prioritized = []
-    for pref in ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"):
+    for pref in ("gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash"):
         for ver, mod in found:
             if mod == pref and (ver, mod) not in prioritized:
                 prioritized.append((ver, mod))
@@ -68,9 +68,8 @@ def get_available_models():
 candidate_models = get_available_models()
 if not candidate_models:
     candidate_models = [
+        ("v1", "gemini-2.5-flash-lite"),
         ("v1beta", "gemini-2.0-flash"),
-        ("v1beta", "gemini-2.5-flash"),
-        ("v1beta", "gemini-1.5-flash-latest"),
     ]
 
 generated_text = None
@@ -111,11 +110,16 @@ print("--------------------------")
 
 SQUARE_ENDPOINTS = [
     "https://www.binance.com/bapi/composite/v1/public/pgc/open/content/add",
-    "https://www.binance.com/bapi/composite/v1/friendly/pgc/open/content/add",
+    "https://www.binance.com/bapi/composite/v1/public/pgc/open/content/publish",
+    "https://www.binance.com/bapi/composite/v1/public/pgc/open/content/create",
+    "https://www.binance.com/bapi/composite/v1/public/pgc/open/post/add",
+    "https://www.binance.com/bapi/composite/v1/public/pgc/open/post/publish",
+    "https://www.binance.com/bapi/composite/v1/public/pgc/open/post/create",
 ]
 
 headers = {
     "Content-Type": "application/json",
+    "clienttype": "web",
     "X-Square-OpenAPI-Key": BINANCE_SQUARE_API_KEY,
     "Authorization": f"Bearer {BINANCE_SQUARE_API_KEY}",
     "User-Agent": "Mozilla/5.0",
@@ -138,11 +142,11 @@ for endpoint in SQUARE_ENDPOINTS:
                 print("Published to Binance Square:", r.text[:300])
                 published = True
                 break
-            square_errors.append(f"{endpoint} [{r.status_code}]: {r.text[:200]}")
+            square_errors.append(f"{endpoint} [{r.status_code}]: {r.text[:160]}")
         except Exception as exc:
-            square_errors.append(f"{endpoint} [EXC]: {str(exc)}")
+            square_errors.append(f"{endpoint} [EXC]: {str(exc)[:160]}")
     if published:
         break
 
 if not published:
-    raise RuntimeError("Failed to publish to Binance Square. Details: " + " | ".join(square_errors))
+    raise RuntimeError("Failed to publish to Binance Square. Details: " + " | ".join(square_errors[-4:]))
